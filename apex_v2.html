@@ -225,37 +225,72 @@ hr{border:none;border-top:1px solid var(--border);margin:14px 0}
 
 /* ===================== DATA ===================== */
 const WL = [
-  {t:"SLV", n:"Silver",         th:"Metals",    ico:"🥈",lev:"1x"},
-  {t:"GLD", n:"Gold",           th:"Metals",    ico:"🥇",lev:"1x"},
-  {t:"USLV",n:"2x Silver",      th:"Metals",    ico:"⚡",lev:"2x"},
-  {t:"NUGT",n:"2x Gold Miners", th:"Metals",    ico:"⛏️",lev:"2x"},
-  {t:"GDXJ",n:"Jr Gold Miners", th:"Metals",    ico:"🪨",lev:"1x"},
-  {t:"SOXL",n:"3x Semis",       th:"Tech",      ico:"💻",lev:"3x"},
-  {t:"TQQQ",n:"3x Nasdaq",      th:"Tech",      ico:"📡",lev:"3x"},
-  {t:"TECL",n:"3x Tech",        th:"Tech",      ico:"🔬",lev:"3x"},
-  {t:"FNGU",n:"3x FANG+",       th:"Tech",      ico:"🤖",lev:"3x"},
-  {t:"LABU",n:"3x Biotech",     th:"Tech",      ico:"🧬",lev:"3x"},
-  {t:"USO", n:"Oil",            th:"Energy",    ico:"🛢️",lev:"1x"},
-  {t:"GUSH",n:"3x Oil & Gas",   th:"Energy",    ico:"🔥",lev:"3x"},
-  {t:"BOIL",n:"2x Natural Gas", th:"Energy",    ico:"💨",lev:"2x"},
-  {t:"DRIP",n:"3x Short Oil",   th:"Energy",    ico:"📉",lev:"3x"},
-  {t:"UNG", n:"Natural Gas",    th:"Energy",    ico:"🌡️",lev:"1x"},
-  {t:"KOLD",n:"2x Short Gas",   th:"Energy",    ico:"❄️",lev:"2x"},
-  {t:"UVXY",n:"1.5x VIX",       th:"Volatility",ico:"🌪️",lev:"1.5x"},
-  {t:"TNA", n:"3x Small Cap",   th:"Macro",     ico:"📊",lev:"3x"},
-  {t:"SPXL",n:"3x S&P 500",     th:"Macro",     ico:"🏦",lev:"3x"},
-  {t:"IBIT",n:"Bitcoin ETF",    th:"Crypto",    ico:"₿", lev:"1x"},
+  // METALS
+  {t:"SLV", n:"Silver",              th:"Metals",     ico:"🥈", lev:"1x"},
+  {t:"GLD", n:"Gold",                th:"Metals",     ico:"🥇", lev:"1x"},
+  {t:"USLV",n:"2x Silver",           th:"Metals",     ico:"⚡", lev:"2x"},
+  {t:"NUGT",n:"2x Gold Miners",      th:"Metals",     ico:"⛏️", lev:"2x"},
+  {t:"GDXJ",n:"Jr Gold Miners",      th:"Metals",     ico:"🪨", lev:"1x"},
+
+  // TECH
+  {t:"SOXL",n:"3x Semis",            th:"Tech",       ico:"💻", lev:"3x"},
+  {t:"TQQQ",n:"3x Nasdaq",           th:"Tech",       ico:"📡", lev:"3x"},
+  {t:"TECL",n:"3x Tech",             th:"Tech",       ico:"🔬", lev:"3x"},
+  {t:"FNGU",n:"3x FANG+",            th:"Tech",       ico:"🤖", lev:"3x"},
+  {t:"LABU",n:"3x Biotech",          th:"Tech",       ico:"🧬", lev:"3x"},
+
+  // ENERGY
+  {t:"USO", n:"Oil",                 th:"Energy",     ico:"🛢️", lev:"1x"},
+  {t:"GUSH",n:"3x Oil & Gas",        th:"Energy",     ico:"🔥", lev:"3x"},
+  {t:"BOIL",n:"2x Natural Gas",      th:"Energy",     ico:"💨", lev:"2x"},
+  {t:"DRIP",n:"3x Short Oil",        th:"Energy",     ico:"📉", lev:"3x"},
+  {t:"UNG", n:"Natural Gas",         th:"Energy",     ico:"🌡️", lev:"1x"},
+  {t:"KOLD",n:"2x Short Gas",        th:"Energy",     ico:"❄️", lev:"2x"},
+
+  // VOLATILITY
+  {t:"UVXY",n:"1.5x VIX",            th:"Volatility", ico:"🌪️", lev:"1.5x"},
+
+  // MACRO — LONG
+  {t:"SPXL",n:"3x S&P 500",          th:"Macro Long", ico:"🏦", lev:"3x"},
+  {t:"TNA", n:"3x Small Cap",        th:"Macro Long", ico:"📊", lev:"3x"},
+  {t:"FAS", n:"3x Financials",       th:"Macro Long", ico:"💳", lev:"3x"},
+  {t:"TMF", n:"3x Long Treasury",    th:"Macro Long", ico:"🏛️", lev:"3x"},
+
+  // MACRO — SHORT
+  {t:"SPXS",n:"3x Short S&P 500",    th:"Macro Short",ico:"🐻", lev:"3x"},
+  {t:"SQQQ",n:"3x Short Nasdaq",     th:"Macro Short",ico:"📛", lev:"3x"},
+  {t:"TZA", n:"3x Short Small Cap",  th:"Macro Short",ico:"⬇️", lev:"3x"},
+  {t:"TBT", n:"2x Short Treasury",   th:"Macro Short",ico:"📋", lev:"2x"},
+
+  // MOMENTUM
+  {t:"SPMO",n:"S&P 500 Momentum",    th:"Momentum",   ico:"🚀", lev:"1x"},
+  {t:"MTUM",n:"US Momentum Factor",  th:"Momentum",   ico:"⚡", lev:"1x"},
+
+  // CHINA
+  {t:"YINN",n:"3x China Bull",       th:"China",      ico:"🐉", lev:"3x"},
+  {t:"YANG",n:"3x China Bear",       th:"China",      ico:"🔻", lev:"3x"},
+
+  // CRYPTO
+  {t:"IBIT",n:"Bitcoin ETF",         th:"Crypto",     ico:"₿",  lev:"1x"},
 ];
-const THEMES = ["Metals","Tech","Energy","Volatility","Macro","Crypto"];
+const THEMES = ["Metals","Tech","Energy","Volatility","Macro Long","Macro Short","Momentum","China","Crypto"];
 const DAYS   = ["MON","TUE","WED","THU","FRI"];
 const CORR = [
-  {a:"SLV",b:"USLV",note:"SLV & USLV move together"},
-  {a:"GLD",b:"NUGT",note:"GLD & NUGT correlated"},
-  {a:"SOXL",b:"TQQQ",note:"Semis & Nasdaq correlated"},
-  {a:"USO",b:"GUSH",note:"Oil & 3x Oil move together"},
-  {a:"BOIL",b:"UNG",note:"Both track natural gas"},
-  {a:"KOLD",b:"BOIL",note:"KOLD is inverse of BOIL"},
-  {a:"DRIP",b:"GUSH",note:"DRIP is inverse of GUSH"},
+  {a:"SLV", b:"USLV", note:"SLV & USLV move together"},
+  {a:"GLD", b:"NUGT", note:"GLD & NUGT correlated"},
+  {a:"SOXL",b:"TQQQ", note:"Semis & Nasdaq correlated"},
+  {a:"USO", b:"GUSH", note:"Oil & 3x Oil move together"},
+  {a:"BOIL",b:"UNG",  note:"Both track natural gas"},
+  {a:"KOLD",b:"BOIL", note:"KOLD is inverse of BOIL"},
+  {a:"DRIP",b:"GUSH", note:"DRIP is inverse of GUSH"},
+  {a:"SPXL",b:"SPXS", note:"SPXL & SPXS are inverses — never hold both"},
+  {a:"TQQQ",b:"SQQQ", note:"TQQQ & SQQQ are inverses — never hold both"},
+  {a:"TNA", b:"TZA",  note:"TNA & TZA are inverses — never hold both"},
+  {a:"TMF", b:"TBT",  note:"TMF & TBT are inverses — never hold both"},
+  {a:"YINN",b:"YANG", note:"YINN & YANG are inverses — never hold both"},
+  {a:"SPXL",b:"TQQQ", note:"SPXL & TQQQ highly correlated in risk-on"},
+  {a:"SPMO",b:"MTUM", note:"SPMO & MTUM overlap significantly"},
+  {a:"FAS", b:"SPXL", note:"Financials & broad market move together"},
 ];
 const RC = {
   "Risk-On Rally":        {bg:"rgba(0,232,122,.06)",border:"rgba(0,232,122,.25)",text:"#00e87a"},
@@ -445,6 +480,7 @@ async function runJTM(){
 Scan the watchlist and give me ONE trade to make right now. Be direct. Give exact dollar numbers. Do not hedge. Do not say 'consider' or 'monitor'. If there is a setup, name it.
 
 ETFs available: ${WL.map(e=>e.t).join(",")}
+These are short-term momentum trades with a 7-14 day holding window. Prioritize setups with clear near-term catalysts, strong recent momentum, and defined technical levels. Do not recommend any ticker based on long-term fundamentals or multi-month thesis.
 Market regime: ${S.regime?.regime||"unknown — assess from context"}
 Live prices: ${liveCtx()}
 Technical data: ${techCtx()}
@@ -454,12 +490,18 @@ Budget: $${S.formBudget||500} | Half-Kelly: $${halfK} | Full-Kelly: $${fullK}
 Open positions: ${S.positions.map(p=>p.etf.t+"@$"+p.entry).join(",")||"none"}
 
 RULES:
+- Timeframe is 7-14 days. The setup must be actionable THIS WEEK, not eventually.
 - If 3+ of these align: (trend direction, momentum, regime fit, not at resistance) — trade is on
-- Lower the bar — I need trades, not reasons to wait
+- Prefer high-momentum names with recent price expansion over mean-reversion setups
+- Leveraged ETFs (2x/3x) are acceptable and preferred when momentum is clear — size accordingly
+- In Risk-On regime: prefer Macro Long, Tech, Momentum themes
+- In Risk-Off regime: prefer Macro Short, Metals, Volatility, TMF
+- In High Volatility Chop: prefer UVXY, inverse ETFs, or no trade
+- In Sector Rotation: scan China, Financials, Energy for the rotating sector
 - Confidence 55-74 — use half-Kelly size. Confidence 75+ — full Kelly
 - ALWAYS produce a primary trade. Even in choppy markets something is worth trading
 - Entry, stop, and target must be exact dollar numbers
-- Stop = entry * stopPct / 100 below entry. Target = entry + (entry - stop) * 2.0
+- Stop = trailing stop from entry. Target = entry + (entry - stop) * 2.0
 - Shares = floor(dollarSize / entry)
 - Today is ${todayFull()} — do not reference any other date
 
@@ -479,6 +521,7 @@ async function runDailyBriefing(){
   const prompt=`Today is ${todayFull()}. You are a professional ETF day trader writing my morning briefing.
 
 ETFs: ${WL.map(e=>e.t).join(",")}
+These are short-term momentum trades with a 7-14 day holding window. Prioritize setups with clear near-term catalysts, strong recent momentum, and defined technical levels. Do not recommend any ticker based on long-term fundamentals or multi-month thesis.
 Market regime: ${S.regime?.regime||"assess from context"}
 Live prices: ${liveCtx()}
 Technical data: ${techCtx()}
@@ -501,6 +544,7 @@ Respond ONLY in valid JSON, no text before or after:
 /* ===================== REGIME ===================== */
 async function runRegime(){
   const prompt=`Today is ${todayFull()}. You are a market strategist. Assess the current US market regime for ETF day trading.
+These are short-term momentum trades with a 7-14 day holding window. Prioritize setups with clear near-term catalysts, strong recent momentum, and defined technical levels. Do not recommend any ticker based on long-term fundamentals or multi-month thesis.
 This week's events: ${eventsCtx()}
 Live prices: ${liveCtx()}
 Technical data: ${techCtx()}
@@ -513,6 +557,7 @@ Respond ONLY in valid JSON, no text before or after:
 /* ===================== WATCHLIST SCAN ===================== */
 async function runWatchlist(){
   const prompt=`Today is ${todayFull()}. Scan these ETFs for day-trade setups: ${WL.map(e=>e.t).join(",")}.
+These are short-term momentum trades with a 7-14 day holding window. Prioritize setups with clear near-term catalysts, strong recent momentum, and defined technical levels. Do not recommend any ticker based on long-term fundamentals or multi-month thesis.
 Market regime: ${S.regime?.regime||"unknown"}. This week's events: ${eventsCtx()}. Live prices: ${liveCtx()}. Technical data: ${techCtx()}.
 For each ETF give a signal (BUY/WATCH/AVOID), a 0-100 score, and a brief note.
 Respond ONLY in valid JSON, no text before or after:
