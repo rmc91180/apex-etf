@@ -1,5 +1,6 @@
 import os, json, requests, datetime, sys, time, re
 from zoneinfo import ZoneInfo
+from json_repair import repair_json
 
 AV_KEY        = os.environ["AV_KEY"]
 CLAUDE_KEY    = os.environ["CLAUDE_KEY"]
@@ -96,7 +97,14 @@ def claude(prompt, tokens=1200):
     if start == -1 or end == -1:
         raise Exception(f"No JSON object found in response: {text[:200]}")
 
-    return json.loads(text[start:end+1])
+    raw = text[start:end+1]
+
+    # Try strict parse, fall back to repair for unescaped quotes / minor syntax errors
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"Strict JSON parse failed ({e}), repairing...")
+        return json.loads(repair_json(raw))
 
 
 def run_morning_scan():
@@ -153,10 +161,17 @@ RULES:
 - Use web search for current market conditions and news
 - Today is {today} — do not reference any other date
 
-Respond ONLY in valid JSON:
+CRITICAL OUTPUT RULES:
+- Respond with ONLY a single valid JSON object. No preamble, no explanation, no markdown.
+- Do NOT narrate your web search findings. Put all reasoning inside the JSON string fields.
+- Inside string values, do NOT use double quotes. Use single quotes or no quotes for emphasis.
+- Keep each string field concise to avoid truncation.
+- Your entire response must start with {{ and end with }}
+
+Then output the JSON object:
 {{"primary":{{"ticker":"","direction":"LONG","entry":0.00,"stop":0.00,"target":0.00,"stopPct":0.0,"rrRatio":"1:2.0","confidence":0,"rationale":"2-3 specific sentences","catalyst":"1 sentence on the near-term trigger"}},"secondary":{{"ticker":"","direction":"LONG","entry":0.00,"stop":0.00,"target":0.00,"confidence":0,"rationale":"1 sentence"}},"avoid":[{{"ticker":"","reason":"brief"}}],"regime":"Risk-On Rally|Risk-Off Safety|High Volatility Chop|Sector Rotation","regimeDirective":"1 sentence what to do today","generatedAt":"{today}"}}"""
 
-    result = claude(prompt, tokens=1400)
+    result = claude(prompt, tokens=2000)
     p = result.get("primary", {})
     s = result.get("secondary", {})
     avoid = result.get("avoid", [])
