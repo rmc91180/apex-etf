@@ -1,0 +1,36 @@
+name: APEX ETF Scanner
+
+on:
+  schedule:
+    # Morning scan — 9:35am ET every weekday (13:35 UTC)
+    - cron: '35 13 * * 1-5'
+    # Position alerts — every 90 min during market hours ET (14:05, 15:35, 17:05, 18:35 UTC = 10:05, 11:35, 1:05, 2:35pm ET)
+    - cron: '05 14 * * 1-5'
+    - cron: '35 15 * * 1-5'
+    - cron: '05 17 * * 1-5'
+    - cron: '35 18 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode: scan or alerts'
+        required: false
+        default: 'scan'
+
+jobs:
+  apex:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: Run APEX scanner
+        env:
+          AV_KEY: ${{ secrets.AV_KEY }}
+          CLAUDE_KEY: ${{ secrets.CLAUDE_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Determine mode from schedule time or manual input
+          RUN_MODE: ${{ github.event.inputs.mode || 'auto' }}
+        run: python apex_scan.py
