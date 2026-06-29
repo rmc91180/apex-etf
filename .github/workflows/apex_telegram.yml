@@ -1,0 +1,36 @@
+name: APEX Telegram Listener
+
+on:
+  schedule:
+    # Every 15 minutes
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  listen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: Process Telegram commands
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python apex_telegram.py
+      - name: Commit position changes
+        run: |
+          git config user.name "apex-bot"
+          git config user.email "apex-bot@users.noreply.github.com"
+          git add positions.json telegram_offset.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update positions from Telegram commands"
+            git push
+          fi
