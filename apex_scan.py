@@ -1,4 +1,4 @@
-import os, json, requests, datetime, sys
+import os, json, requests, datetime, sys, time, re
 from zoneinfo import ZoneInfo
 
 AV_KEY        = os.environ["AV_KEY"]
@@ -71,13 +71,32 @@ def claude(prompt, tokens=1200):
             "tools": [{"type": "web_search_20250305", "name": "web_search"}],
             "messages": [{"role": "user", "content": prompt}]
         },
-        timeout=60
+        timeout=90
     )
     d = r.json()
-    text = " ".join(b["text"] for b in d.get("content", []) if b.get("type") == "text")
+    if r.status_code != 200:
+        raise Exception(f"Claude HTTP {r.status_code}: {d}")
+
+    # Collect only text blocks — web search produces tool_use/tool_result blocks
+    # before the final text block; we want only text blocks
+    text_blocks = [b["text"] for b in d.get("content", []) if b.get("type") == "text"]
+    if not text_blocks:
+        raise Exception(f"No text block in Claude response. Content types: {[b.get('type') for b in d.get('content', [])]}")
+
+    text = " ".join(text_blocks)
+
     # Strip markdown fences
-    text = text.replace("```json","").replace("```","").strip()
-    return json.loads(text)
+    text = re.sub(r'```json\s*', '', text)
+    text = re.sub(r'```\s*', '', text)
+    text = text.strip()
+
+    # Find the JSON object — handle any preamble before the opening brace
+    start = text.find('{')
+    end = text.rfind('}')
+    if start == -1 or end == -1:
+        raise Exception(f"No JSON object found in response: {text[:200]}")
+
+    return json.loads(text[start:end+1])
 
 
 def run_morning_scan():
@@ -93,6 +112,17 @@ def run_morning_scan():
                 quotes[ticker] = q
         except Exception as e:
             print(f"Quote failed {ticker}: {e}")
+        time.sleep(13)  # AV free tier: max 5 calls/minute
+
+    if len(quotes) < 2:
+        msg = (
+            f"⚠️ <b>APEX Morning Scan — {today}</b>\n"
+            f"Scan aborted: only {len(quotes)}/5 AV quotes succeeded (rate limit).\n"
+            f"Try again in a few minutes or check your AV key."
+        )
+        tg(msg)
+        print(f"Insufficient quotes ({len(quotes)}). Aborting.")
+        return
 
     live_ctx = ", ".join(
         f"{t}:${q['price']:.2f}({q['chg_pct']:+.2f}%)"
@@ -177,6 +207,7 @@ def run_position_alerts():
 
         try:
             q = av_quote(ticker)
+            time.sleep(13)  # AV free tier: max 5 calls/minute
             if not q:
                 continue
             price = q["price"]
