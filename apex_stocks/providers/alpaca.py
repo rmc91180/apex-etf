@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import re
 import time
 from typing import Any, Iterable, Sequence
 
@@ -31,6 +32,10 @@ from .base import DataUnavailable
 DATA_URL = "https://data.alpaca.markets"
 TRADING_URLS = ("https://paper-api.alpaca.markets", "https://api.alpaca.markets")
 SIP_DELAY = dt.timedelta(minutes=16)
+# Plain listed tickers, optionally with a share-class suffix (BRK.B). Delisted
+# assets carry names like "CCT_DELISTED" that the data API rejects.
+VALID_SYMBOL = re.compile(r"^[A-Z]{1,6}(\.[A-Z]{1,2})?$")
+_INVALID_SYMBOL = re.compile(r"invalid symbol: ([^\"'}\s,]+)")
 EXCHANGE_MAP = {"NYSE": "NYSE", "NASDAQ": "NASDAQ", "AMEX": "AMEX", "ARCA": "ARCA", "BATS": "BATS", "OTC": "OTC"}
 
 
@@ -84,7 +89,7 @@ class AlpacaProvider:
                 if r.status_code == 200:
                     return r.json()
                 err = f"HTTP {r.status_code}: {r.text[:200]}"
-                if r.status_code in (401, 403, 404, 422):
+                if r.status_code in (400, 401, 403, 404, 422):
                     raise DataUnavailable(f"{url}: {err}")
             time.sleep(min(30, 2 ** attempt))
         raise DataUnavailable(f"{url}: {err}")
@@ -114,6 +119,8 @@ class AlpacaProvider:
             raise DataUnavailable(f"asset list unavailable: {last_err}")
         out = []
         for a in assets:
+            if not VALID_SYMBOL.match(a.get("symbol", "")):
+                continue
             exch = EXCHANGE_MAP.get(a.get("exchange", ""), a.get("exchange", ""))
             out.append(Security(
                 symbol=a["symbol"], name=a.get("name") or "", exchange=exch,
@@ -194,11 +201,23 @@ class AlpacaProvider:
         if end <= start:
             return out
         for batch in _chunks(list(symbols), batch_size):
-            for page in self._paged(f"{DATA_URL}/v2/stocks/bars", {
-                "symbols": ",".join(batch), "timeframe": timeframe, "start": _rfc(start), "end": _rfc(end),
-                "feed": "sip", "limit": 10000, "adjustment": adjustment}, "bars", max_pages=500):
-                for sym, bars in page.items():
+            while batch:
+                got: dict[str, list[dict]] = {}
+                try:
+                    for page in self._paged(f"{DATA_URL}/v2/stocks/bars", {
+                        "symbols": ",".join(batch), "timeframe": timeframe, "start": _rfc(start), "end": _rfc(end),
+                        "feed": "sip", "limit": 10000, "adjustment": adjustment}, "bars", max_pages=500):
+                        for sym, bars in page.items():
+                            got.setdefault(sym, []).extend(bars)
+                except DataUnavailable as e:
+                    bad = _INVALID_SYMBOL.search(str(e))
+                    if not bad or bad.group(1) not in batch:
+                        raise
+                    batch = [s for s in batch if s != bad.group(1)]  # drop it and retry the rest
+                    continue
+                for sym, bars in got.items():
                     out.setdefault(sym, []).extend(bars)
+                break
         return out
 
     def get_daily_bars_many(self, symbols: Sequence[str], start: dt.date, end: dt.date) -> dict[str, list[Bar]]:

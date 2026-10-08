@@ -150,3 +150,19 @@ def test_server_errors_are_retried():
     responses = iter([Resp(500, {}), SNAP])
     p = provider({"/v2/stocks/snapshots": lambda params: next(responses)})
     assert "ABCD" in p.get_snapshots(["ABCD"])
+
+
+def test_delisted_placeholder_symbols_are_skipped_and_invalid_ones_dropped_from_batches():
+    assets = [{"symbol": "CCT_DELISTED", "name": "x", "exchange": "NYSE", "tradable": False, "status": "inactive"},
+              {"symbol": "BRK.B", "name": "Berkshire Hathaway Class B", "exchange": "NYSE", "tradable": True, "status": "active"}]
+    p = provider({"/v2/assets": assets})
+    assert [s.symbol for s in p.list_universe()] == ["BRK.B"]
+
+    def bars(params):
+        if "OLD" in params["symbols"].split(","):
+            return Resp(400, {"message": "invalid symbol: OLD"})
+        return {"bars": {"ABCD": [{"t": "2026-10-05T04:00:00Z", "o": 1, "h": 2, "l": 1, "c": 2, "v": 10}]}}
+
+    p = provider({"/v2/stocks/bars": bars})
+    out = p.bars_raw(["ABCD", "OLD"], "1Day", NOW - dt.timedelta(days=5), NOW - dt.timedelta(days=1))
+    assert list(out) == ["ABCD"]
