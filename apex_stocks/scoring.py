@@ -91,22 +91,34 @@ def risk(f: Features) -> tuple[float, dict]:
 
 
 def confidence(f: Features, cfg: Config) -> tuple[float, list[str]]:
+    """Trust in the data, 0-100.
+
+    Inputs a provider structurally cannot supply (no pre-market spreads or
+    fundamentals on the free Alpaca plan) are left out and the remaining
+    weights rescaled, rather than counted as bad data. They are still listed
+    as issues so the message says what was not checked.
+    """
     issues: list[str] = []
+    fresh_full = cfg.EXPECTED_DATA_DELAY_MINUTES + 5
     parts = {
-        "fresh_quote": (lin(f.quote_age_minutes, cfg.MAX_QUOTE_AGE_MINUTES, 2), 0.25),
-        "tight_spread": (lin(f.spread_pct, cfg.MAX_SPREAD_PERCENT * 1.5, 0.2), 0.20),
-        "premarket_liquidity": (lin((f.premarket_volume or 0) * f.reference_price, 50_000, 1_000_000), 0.25),
+        "fresh_quote": (lin(f.quote_age_minutes, cfg.MAX_QUOTE_AGE_MINUTES, fresh_full), 0.25),
+        "premarket_liquidity": (lin((f.premarket_volume or 0) * f.reference_price, 50_000, 1_000_000), 0.30),
         "history": (lin(f.history_days, cfg.MIN_HISTORY_DAYS, 200), 0.15),
-        "fundamentals_known": ((f.market_cap is not None) * 0.5 + (f.float_shares is not None) * 0.5, 0.15),
     }
-    if f.spread_pct is None:
-        issues.append("no bid/ask quote")
+    if f.spread_pct is not None:
+        parts["tight_spread"] = (lin(f.spread_pct, cfg.MAX_SPREAD_PERCENT * 1.5, 0.2), 0.20)
+    else:
+        issues.append("no pre-market bid/ask quote; spread not checked")
+    if f.market_cap is not None or f.float_shares is not None:
+        parts["fundamentals_known"] = ((f.market_cap is not None) * 0.5 + (f.float_shares is not None) * 0.5, 0.10)
+    else:
+        issues.append("market cap and float unknown")
     if f.premarket_volume is None:
         issues.append("pre-market volume unavailable")
     elif f.premarket_volume * f.reference_price < 50_000:
         issues.append("thin pre-market trading; pre-market price may not hold at the open")
-    if f.quote_age_minutes > cfg.MAX_QUOTE_AGE_MINUTES / 2:
-        issues.append(f"quote is {f.quote_age_minutes:.0f} minutes old")
+    if f.quote_age_minutes > fresh_full + (cfg.MAX_QUOTE_AGE_MINUTES - fresh_full) / 2:
+        issues.append(f"latest pre-market trade is {f.quote_age_minutes:.0f} minutes old")
     score, _ = _weighted(parts)
     return round(score * 100, 1), issues
 

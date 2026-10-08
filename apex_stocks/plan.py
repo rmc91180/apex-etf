@@ -55,7 +55,7 @@ def risk_factors(c: "Candidate") -> list[str]:
         out.append("no identifiable news catalyst")
     if f.rsi14 is not None and f.rsi14 > 75:
         out.append(f"overbought (RSI {f.rsi14:.0f})")
-    out.extend(c.score.quality_issues)
+    out.extend(i for i in c.score.quality_issues if "unknown" not in i and "not checked" not in i)
     return out
 
 
