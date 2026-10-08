@@ -69,6 +69,10 @@ class Config:
     # Never suggest more than this share of the stock's average daily volume.
     MAX_POSITION_ADV_PERCENT: float = 1.0
 
+    # Pre-market scan time, Eastern. Free-plan consolidated data lags 16 minutes,
+    # so an 8:45 scan sees pre-market activity through about 8:29.
+    SCAN_TIME_ET: str = "08:45"
+
     # Runtime
     MARKET_TIMEZONE: str = "America/New_York"
     USER_TIMEZONE: str = "America/New_York"
@@ -76,6 +80,12 @@ class Config:
     ALPACA_DATA_FEED: str = "iex"  # iex (free) or sip (paid)
     DB_PATH: str = "data/apex_stocks.db"
     NOTIFIER: str = "console"
+
+    @property
+    def scan_time(self):
+        import datetime as _dt
+        h, m = (int(x) for x in self.SCAN_TIME_ET.split(":"))
+        return _dt.time(h, m)
 
     @property
     def alert_leads(self) -> list[int]:
@@ -98,6 +108,12 @@ class Config:
             raise ConfigError("EXIT_MINUTES_BEFORE_CLOSE must be >= 0")
         if self.PROFIT_TARGET_PERCENT <= 0 or self.STOP_LOSS_PERCENT <= 0:
             raise ConfigError("PROFIT_TARGET_PERCENT and STOP_LOSS_PERCENT must be positive")
+        try:
+            h, m = (int(x) for x in self.SCAN_TIME_ET.split(":"))
+            if not (4 <= h < 9 or (h == 9 and m < 30)):
+                raise ValueError
+        except ValueError:
+            raise ConfigError("SCAN_TIME_ET must be HH:MM between 04:00 and 09:29") from None
         weights = (self.WEIGHT_MOMENTUM, self.WEIGHT_VOLUME, self.WEIGHT_CATALYST,
                    self.WEIGHT_TECHNICAL, self.WEIGHT_RISK)
         if any(w < 0 for w in weights) or abs(sum(weights) - 100) > 1e-6:

@@ -101,11 +101,12 @@ class AlpacaProvider:
         raise DataUnavailable(f"{url}: more than {max_pages} pages")
 
     # ── interface ──────────────────────────────────────────────
-    def list_universe(self) -> list[Security]:
+    def list_universe(self, status: str = "active") -> list[Security]:
+        """Active assets. status="inactive" lists delisted ones, which backtests need to avoid survivorship bias."""
         last_err = None
         for base in TRADING_URLS:  # paper keys work on paper-api, live keys on api
             try:
-                assets = self._get(f"{base}/v2/assets", {"status": "active", "asset_class": "us_equity"})
+                assets = self._get(f"{base}/v2/assets", {"status": status, "asset_class": "us_equity"})
                 break
             except DataUnavailable as e:
                 last_err = e
@@ -117,7 +118,7 @@ class AlpacaProvider:
             out.append(Security(
                 symbol=a["symbol"], name=a.get("name") or "", exchange=exch,
                 asset_type=classify_asset(a["symbol"], a.get("name") or "", exch),
-                tradable=bool(a.get("tradable")) and a.get("status") == "active",
+                tradable=status != "active" or (bool(a.get("tradable")) and a.get("status") == "active"),
             ))
         return out
 
@@ -185,18 +186,25 @@ class AlpacaProvider:
                     out[sym] = (None, 0.0, None)
         return out
 
-    def get_daily_bars_many(self, symbols: Sequence[str], start: dt.date, end: dt.date) -> dict[str, list[Bar]]:
-        now = self._now()
-        end_t = min(dt.datetime.combine(end, dt.time(23, 59), ET), now - SIP_DELAY)
-        start_t = dt.datetime.combine(start, dt.time(0, 0), ET)
-        out: dict[str, list[Bar]] = {}
-        for batch in _chunks(list(symbols), 100):
+    def bars_raw(self, symbols: Sequence[str], timeframe: str, start: dt.datetime, end: dt.datetime,
+                 adjustment: str = "raw", batch_size: int = 100) -> dict[str, list[dict]]:
+        """Consolidated bars as Alpaca returns them, never newer than the free-plan delay."""
+        end = min(end, self._now() - SIP_DELAY)
+        out: dict[str, list[dict]] = {}
+        if end <= start:
+            return out
+        for batch in _chunks(list(symbols), batch_size):
             for page in self._paged(f"{DATA_URL}/v2/stocks/bars", {
-                "symbols": ",".join(batch), "timeframe": "1Day", "start": _rfc(start_t), "end": _rfc(end_t),
-                "feed": "sip", "limit": 10000, "adjustment": "all"}, "bars"):
+                "symbols": ",".join(batch), "timeframe": timeframe, "start": _rfc(start), "end": _rfc(end),
+                "feed": "sip", "limit": 10000, "adjustment": adjustment}, "bars", max_pages=500):
                 for sym, bars in page.items():
-                    out.setdefault(sym, []).extend(_bar(b) for b in bars)
+                    out.setdefault(sym, []).extend(bars)
         return out
+
+    def get_daily_bars_many(self, symbols: Sequence[str], start: dt.date, end: dt.date) -> dict[str, list[Bar]]:
+        raw = self.bars_raw(symbols, "1Day", dt.datetime.combine(start, dt.time(0, 0), ET),
+                            dt.datetime.combine(end, dt.time(23, 59), ET), adjustment="all")
+        return {s: [_bar(b) for b in bars] for s, bars in raw.items()}
 
     def get_daily_bars(self, symbol: str, start: dt.date, end: dt.date) -> list[Bar]:
         bars = self.get_daily_bars_many([symbol], start, end).get(symbol)
@@ -215,12 +223,14 @@ class AlpacaProvider:
             bars.extend(_bar(b) for b in page.get(symbol, []))
         return bars
 
-    def get_news(self, symbols: Sequence[str], since: dt.datetime) -> list[NewsItem]:
+    def get_news(self, symbols: Sequence[str], since: dt.datetime, until: dt.datetime | None = None) -> list[NewsItem]:
         items: dict[str, NewsItem] = {}
+        params = {"start": _rfc(since), "limit": 50, "sort": "desc", "include_content": "false"}
+        if until is not None:
+            params["end"] = _rfc(until)
         for batch in _chunks(list(symbols), 50):
-            for page in self._paged(f"{DATA_URL}/v1beta1/news", {
-                "symbols": ",".join(batch), "start": _rfc(since), "limit": 50, "sort": "desc",
-                "include_content": "false"}, "news", max_pages=10):
+            for page in self._paged(f"{DATA_URL}/v1beta1/news", dict(params, symbols=",".join(batch)),
+                                    "news", max_pages=10):
                 for n in page:
                     nid = str(n["id"])
                     items[nid] = NewsItem(
