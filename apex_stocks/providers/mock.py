@@ -90,7 +90,7 @@ class MockProvider:
             t += step
         return bars
 
-    def get_snapshots(self, symbols: Sequence[str]) -> dict[str, Snapshot]:
+    def get_snapshots(self, symbols: Sequence[str], include_premarket: bool = False) -> dict[str, Snapshot]:
         now = self._now().astimezone(ET)
         out = {}
         for sym in symbols:

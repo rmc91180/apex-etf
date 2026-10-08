@@ -25,6 +25,27 @@ class Config:
     MAX_SPREAD_PERCENT: float = 1.0
     MIN_HISTORY_DAYS: int = 60
     ALLOW_SPACS: bool = False
+    # Snapshots older than this are treated as stale and rejected.
+    MAX_QUOTE_AGE_MINUTES: int = 30
+    # Reject a stock that has already run this far over 5 days without fresh news.
+    MAX_5D_RUNUP_NO_CATALYST_PERCENT: float = 40.0
+    # Reject pre-market gaps beyond this size (possible bad print, split, or binary event).
+    MAX_ABS_GAP_PERCENT: float = 60.0
+    # A one-day close-to-close move beyond this ratio in history suggests a split or bad data.
+    SPLIT_SUSPECT_RATIO: float = 1.8
+    # Typical share of a day's volume that trades before 9:30, used to normalise pre-market volume.
+    PREMARKET_VOLUME_FRACTION: float = 0.05
+    # How far back to look for catalyst news, in hours before the scan.
+    NEWS_LOOKBACK_HOURS: float = 20.0
+
+    # Scoring weights (percent, must sum to 100)
+    WEIGHT_MOMENTUM: float = 25.0
+    WEIGHT_VOLUME: float = 20.0
+    WEIGHT_CATALYST: float = 20.0
+    WEIGHT_TECHNICAL: float = 20.0
+    WEIGHT_RISK: float = 15.0
+    # Without a qualifying catalyst the signal score is capped here (catalyst-first rule).
+    NO_CATALYST_SCORE_CAP: float = 65.0
 
     # Trade plan
     PROFIT_TARGET_PERCENT: float = 7.0
@@ -33,6 +54,9 @@ class Config:
     # Which session to exit in: 0 = same day as entry, 1 = next trading day.
     EXIT_SESSION_OFFSET: int = 1
     EXIT_MINUTES_BEFORE_CLOSE: int = 30
+    # Entry range is reference price +/- this percent; max entry is reference + MAX_CHASE_PERCENT.
+    ENTRY_BAND_PERCENT: float = 0.5
+    MAX_CHASE_PERCENT: float = 2.0
     ALERT_LEAD_MINUTES: str = "60,30,0"
 
     # Selection
@@ -42,11 +66,14 @@ class Config:
     # Position sizing (informational only; the user places trades)
     ACCOUNT_SIZE: float = 0.0
     MAX_POSITION_RISK_PERCENT: float = 1.0
+    # Never suggest more than this share of the stock's average daily volume.
+    MAX_POSITION_ADV_PERCENT: float = 1.0
 
     # Runtime
     MARKET_TIMEZONE: str = "America/New_York"
     USER_TIMEZONE: str = "America/New_York"
     DATA_PROVIDER: str = "mock"
+    ALPACA_DATA_FEED: str = "iex"  # iex (free) or sip (paid)
     DB_PATH: str = "data/apex_stocks.db"
     NOTIFIER: str = "console"
 
@@ -71,6 +98,10 @@ class Config:
             raise ConfigError("EXIT_MINUTES_BEFORE_CLOSE must be >= 0")
         if self.PROFIT_TARGET_PERCENT <= 0 or self.STOP_LOSS_PERCENT <= 0:
             raise ConfigError("PROFIT_TARGET_PERCENT and STOP_LOSS_PERCENT must be positive")
+        weights = (self.WEIGHT_MOMENTUM, self.WEIGHT_VOLUME, self.WEIGHT_CATALYST,
+                   self.WEIGHT_TECHNICAL, self.WEIGHT_RISK)
+        if any(w < 0 for w in weights) or abs(sum(weights) - 100) > 1e-6:
+            raise ConfigError("scoring weights must be non-negative and sum to 100")
         self.alert_leads  # parses and checks
         return self
 
