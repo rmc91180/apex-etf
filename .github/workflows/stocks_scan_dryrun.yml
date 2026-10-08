@@ -1,0 +1,32 @@
+name: APEX Stocks Dry-Run Scan
+
+# Manual only. Runs the pre-market selection against Alpaca and prints the
+# result in the job log. Sends no Telegram messages and stores nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      at:
+        description: 'Optional ET time to pretend the scan runs at (pre-market), e.g. 2026-10-08T08:00'
+        required: false
+        default: ''
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Dry-run scan
+        env:
+          DATA_PROVIDER: alpaca
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+        run: |
+          if [ -n "${{ github.event.inputs.at }}" ]; then
+            python -m apex_stocks.cli scan --at "${{ github.event.inputs.at }}" --top 15
+          else
+            python -m apex_stocks.cli scan --top 15
+          fi

@@ -24,8 +24,12 @@ class MarketDataProvider(Protocol):
 
     def list_universe(self) -> list[Security]: ...
 
-    def get_snapshots(self, symbols: Sequence[str]) -> dict[str, Snapshot]:
-        """Latest snapshot per symbol. Symbols with no data are omitted."""
+    def get_snapshots(self, symbols: Sequence[str], include_premarket: bool = False) -> dict[str, Snapshot]:
+        """Latest snapshot per symbol. Symbols with no data are omitted.
+
+        With include_premarket, also fill premarket_price and premarket_volume
+        (this can be expensive, so the engine asks only for a short list).
+        """
         ...
 
     def get_daily_bars(self, symbol: str, start: dt.date, end: dt.date) -> list[Bar]:
