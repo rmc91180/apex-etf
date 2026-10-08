@@ -27,6 +27,9 @@ class Config:
     ALLOW_SPACS: bool = False
     # Snapshots older than this are treated as stale and rejected.
     MAX_QUOTE_AGE_MINUTES: int = 30
+    # Normal lag of the data feed (free Alpaca consolidated data is 16 minutes behind).
+    # Quotes this old are treated as fresh for confidence scoring.
+    EXPECTED_DATA_DELAY_MINUTES: int = 16
     # Reject a stock that has already run this far over 5 days without fresh news.
     MAX_5D_RUNUP_NO_CATALYST_PERCENT: float = 40.0
     # Reject pre-market gaps beyond this size (possible bad print, split, or binary event).
