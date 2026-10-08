@@ -138,7 +138,7 @@ def test_no_trade_when_threshold_not_met(p):
 def test_low_confidence_blocks_high_signal(p):
     bars = trending_bars(DAY, 120, 6.0, 0.4, 3_000_000)
     p.add(sec("THINPM", market_cap=None, float_shares=None), bars, premarket=bars[-1].close * 1.06,
-          pm_volume=2_000, age_minutes=20)
+          pm_volume=2_000, age_minutes=28)
     p.add_news("THINPM", "THINPM Inc wins contract")
     scored = select(p, Config(MIN_SIGNAL_SCORE=0, MIN_CONFIDENCE_SCORE=0), NOW).pick
     assert scored.score.confidence < 50

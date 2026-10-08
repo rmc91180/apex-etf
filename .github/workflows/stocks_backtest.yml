@@ -1,0 +1,51 @@
+name: APEX Stocks Backtest
+
+# Runs the walk-forward backtest against Alpaca history. Manual, or on a push
+# to the claude/backtest-run branch (so it can run before this file is on main).
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: 'First trading day (YYYY-MM-DD)'
+        required: true
+        default: '2025-04-01'
+      end:
+        description: 'Last trading day (YYYY-MM-DD)'
+        required: true
+        default: '2026-09-30'
+  push:
+    branches: [claude/backtest-run]
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Restore data cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/backtest
+          key: backtest-data-${{ github.run_id }}
+          restore-keys: backtest-data-
+      - name: Run backtest
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+        run: |
+          START="${{ github.event.inputs.start }}"; END="${{ github.event.inputs.end }}"
+          if [ -f backtest-range.txt ] && [ -z "$START" ]; then read START END < backtest-range.txt; fi
+          python -m apex_stocks.cli backtest --start "${START:-2025-04-01}" --end "${END:-2026-09-30}" --out backtest-results
+      - name: Publish report
+        if: always()
+        run: |
+          if [ -f backtest-results/report.md ]; then cat backtest-results/report.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backtest-results
+          path: backtest-results

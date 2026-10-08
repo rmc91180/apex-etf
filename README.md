@@ -40,6 +40,23 @@ DATA_PROVIDER=mock python -m apex_stocks.cli scan --at 2026-10-08T08:00
 
 With Alpaca, set `DATA_PROVIDER=alpaca`, `ALPACA_KEY` and `ALPACA_SECRET`, or run the **APEX Stocks Dry-Run Scan** workflow from the Actions tab.
 
+### Backtest
+
+`backtest.py` replays history day by day through the same `engine.select()`, using only what was knowable at the scan time (`SCAN_TIME_ET`, 8:45 by default): daily bars before the trade date, pre-market bars delayed 16 minutes as on the free plan, and news published before the scan. Delisted symbols are included where Alpaca lists them.
+
+- **Trade simulation:** buy at the open (skipped if the open is above the max entry or at or below the stop), then exit at the target, the stop or the planned exit time on 5-minute bars. If the target and the stop fall in the same bar, the stop is assumed.
+- **Slippage sensitivity:** 0, 0.1, 0.25, 0.5 and 1.0% per side.
+- **Walk-forward:** score thresholds are chosen on 6 months of history and applied to the next 2 unseen months, rolling forward. A fold that finds nothing better than zero stays out of the market. The headline result is out-of-sample.
+- **Comparisons:** every top pick with no thresholds, a baseline of all scored candidates, results by signal-score bucket, by market regime (SPY vs its 50-day average) and by month.
+
+Run it from the **APEX Stocks Backtest** workflow (Actions tab), or locally with Alpaca keys:
+
+```bash
+python -m apex_stocks.cli backtest --start 2025-04-01 --end 2026-09-30
+```
+
+Data is cached in `.cache/backtest`, so reruns over the same period make no API calls.
+
 ### Exit timing rules
 
 - The exit is `EXIT_MINUTES_BEFORE_CLOSE` (30) minutes before the close of the session `EXIT_SESSION_OFFSET` (1) sessions after entry, so a Wednesday pick exits Thursday at 3:30 PM ET.
@@ -57,5 +74,5 @@ python -m pytest -q
 ### Roadmap
 
 1. Foundation (done).
-2. Signal engine (done); walk-forward backtest with slippage (next).
+2. Signal engine and walk-forward backtest (done).
 3. Scheduled pre-market run and Telegram alerts via GitHub Actions, with outcome tracking.

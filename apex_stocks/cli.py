@@ -40,6 +40,37 @@ def _scan(args) -> int:
     return 0 if r.status != "failed" else 1
 
 
+def _backtest(args) -> int:
+    import dataclasses as _dc
+    from pathlib import Path
+
+    from . import backtest
+    from .history import HistoryCache
+    from .providers.alpaca import AlpacaProvider
+
+    cfg = load_config()
+    source = None if args.cache_only else AlpacaProvider()
+    cache = HistoryCache(args.cache, source)
+    start, end = dt.date.fromisoformat(args.start), dt.date.fromisoformat(args.end)
+    records = backtest.run(cache, cfg, start, end)
+    summary = backtest.summarize(records, cfg)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
+    (out / "report.md").write_text(backtest.report_markdown(summary))
+    with open(out / "days.csv", "w") as f:
+        f.write("day,status,symbol,signal,confidence,catalyst,regime,entry,exit,exit_reason,gross_pct,mfe_pct,mae_pct,skip_reason\n")
+        for r in records:
+            t = r.trade
+            f.write(",".join(str(x) for x in (
+                r.day, r.status, r.symbol or "", r.signal or "", r.confidence or "", r.catalyst or "", r.regime or "",
+                t.entry if t else "", t.exit if t else "", t.exit_reason if t else "",
+                round(t.net_return(0) * 100, 3) if t else "", t.mfe_pct if t else "", t.mae_pct if t else "",
+                (r.skip_reason or "").replace(",", ";"))) + "\n")
+    print(backtest.report_markdown(summary))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="apex_stocks")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -47,6 +78,13 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--at", help="pretend the scan runs at this ET time, e.g. 2026-10-08T08:00 (must be pre-market)")
     s.add_argument("--top", type=int, default=10)
     s.set_defaults(fn=_scan)
+    b = sub.add_parser("backtest", help="walk-forward backtest over a date range")
+    b.add_argument("--start", required=True)
+    b.add_argument("--end", required=True)
+    b.add_argument("--cache", default=".cache/backtest")
+    b.add_argument("--out", default="backtest-results")
+    b.add_argument("--cache-only", action="store_true", help="use cached data only; make no API calls")
+    b.set_defaults(fn=_backtest)
     args = ap.parse_args(argv)
     return args.fn(args)
 

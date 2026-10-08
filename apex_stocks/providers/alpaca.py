@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import re
 import time
 from typing import Any, Iterable, Sequence
 
@@ -31,6 +32,10 @@ from .base import DataUnavailable
 DATA_URL = "https://data.alpaca.markets"
 TRADING_URLS = ("https://paper-api.alpaca.markets", "https://api.alpaca.markets")
 SIP_DELAY = dt.timedelta(minutes=16)
+# Plain listed tickers, optionally with a share-class suffix (BRK.B). Delisted
+# assets carry names like "CCT_DELISTED" that the data API rejects.
+VALID_SYMBOL = re.compile(r"^[A-Z]{1,6}(\.[A-Z]{1,2})?$")
+_INVALID_SYMBOL = re.compile(r"invalid symbol: ([^\"'}\s,]+)")
 EXCHANGE_MAP = {"NYSE": "NYSE", "NASDAQ": "NASDAQ", "AMEX": "AMEX", "ARCA": "ARCA", "BATS": "BATS", "OTC": "OTC"}
 
 
@@ -84,7 +89,7 @@ class AlpacaProvider:
                 if r.status_code == 200:
                     return r.json()
                 err = f"HTTP {r.status_code}: {r.text[:200]}"
-                if r.status_code in (401, 403, 404, 422):
+                if r.status_code in (400, 401, 403, 404, 422):
                     raise DataUnavailable(f"{url}: {err}")
             time.sleep(min(30, 2 ** attempt))
         raise DataUnavailable(f"{url}: {err}")
@@ -101,11 +106,12 @@ class AlpacaProvider:
         raise DataUnavailable(f"{url}: more than {max_pages} pages")
 
     # ── interface ──────────────────────────────────────────────
-    def list_universe(self) -> list[Security]:
+    def list_universe(self, status: str = "active") -> list[Security]:
+        """Active assets. status="inactive" lists delisted ones, which backtests need to avoid survivorship bias."""
         last_err = None
         for base in TRADING_URLS:  # paper keys work on paper-api, live keys on api
             try:
-                assets = self._get(f"{base}/v2/assets", {"status": "active", "asset_class": "us_equity"})
+                assets = self._get(f"{base}/v2/assets", {"status": status, "asset_class": "us_equity"})
                 break
             except DataUnavailable as e:
                 last_err = e
@@ -113,11 +119,13 @@ class AlpacaProvider:
             raise DataUnavailable(f"asset list unavailable: {last_err}")
         out = []
         for a in assets:
+            if not VALID_SYMBOL.match(a.get("symbol", "")):
+                continue
             exch = EXCHANGE_MAP.get(a.get("exchange", ""), a.get("exchange", ""))
             out.append(Security(
                 symbol=a["symbol"], name=a.get("name") or "", exchange=exch,
                 asset_type=classify_asset(a["symbol"], a.get("name") or "", exch),
-                tradable=bool(a.get("tradable")) and a.get("status") == "active",
+                tradable=status != "active" or (bool(a.get("tradable")) and a.get("status") == "active"),
             ))
         return out
 
@@ -185,18 +193,37 @@ class AlpacaProvider:
                     out[sym] = (None, 0.0, None)
         return out
 
-    def get_daily_bars_many(self, symbols: Sequence[str], start: dt.date, end: dt.date) -> dict[str, list[Bar]]:
-        now = self._now()
-        end_t = min(dt.datetime.combine(end, dt.time(23, 59), ET), now - SIP_DELAY)
-        start_t = dt.datetime.combine(start, dt.time(0, 0), ET)
-        out: dict[str, list[Bar]] = {}
-        for batch in _chunks(list(symbols), 100):
-            for page in self._paged(f"{DATA_URL}/v2/stocks/bars", {
-                "symbols": ",".join(batch), "timeframe": "1Day", "start": _rfc(start_t), "end": _rfc(end_t),
-                "feed": "sip", "limit": 10000, "adjustment": "all"}, "bars"):
-                for sym, bars in page.items():
-                    out.setdefault(sym, []).extend(_bar(b) for b in bars)
+    def bars_raw(self, symbols: Sequence[str], timeframe: str, start: dt.datetime, end: dt.datetime,
+                 adjustment: str = "raw", batch_size: int = 100) -> dict[str, list[dict]]:
+        """Consolidated bars as Alpaca returns them, never newer than the free-plan delay."""
+        end = min(end, self._now() - SIP_DELAY)
+        out: dict[str, list[dict]] = {}
+        if end <= start:
+            return out
+        for batch in _chunks(list(symbols), batch_size):
+            while batch:
+                got: dict[str, list[dict]] = {}
+                try:
+                    for page in self._paged(f"{DATA_URL}/v2/stocks/bars", {
+                        "symbols": ",".join(batch), "timeframe": timeframe, "start": _rfc(start), "end": _rfc(end),
+                        "feed": "sip", "limit": 10000, "adjustment": adjustment}, "bars", max_pages=500):
+                        for sym, bars in page.items():
+                            got.setdefault(sym, []).extend(bars)
+                except DataUnavailable as e:
+                    bad = _INVALID_SYMBOL.search(str(e))
+                    if not bad or bad.group(1) not in batch:
+                        raise
+                    batch = [s for s in batch if s != bad.group(1)]  # drop it and retry the rest
+                    continue
+                for sym, bars in got.items():
+                    out.setdefault(sym, []).extend(bars)
+                break
         return out
+
+    def get_daily_bars_many(self, symbols: Sequence[str], start: dt.date, end: dt.date) -> dict[str, list[Bar]]:
+        raw = self.bars_raw(symbols, "1Day", dt.datetime.combine(start, dt.time(0, 0), ET),
+                            dt.datetime.combine(end, dt.time(23, 59), ET), adjustment="all")
+        return {s: [_bar(b) for b in bars] for s, bars in raw.items()}
 
     def get_daily_bars(self, symbol: str, start: dt.date, end: dt.date) -> list[Bar]:
         bars = self.get_daily_bars_many([symbol], start, end).get(symbol)
@@ -215,12 +242,14 @@ class AlpacaProvider:
             bars.extend(_bar(b) for b in page.get(symbol, []))
         return bars
 
-    def get_news(self, symbols: Sequence[str], since: dt.datetime) -> list[NewsItem]:
+    def get_news(self, symbols: Sequence[str], since: dt.datetime, until: dt.datetime | None = None) -> list[NewsItem]:
         items: dict[str, NewsItem] = {}
+        params = {"start": _rfc(since), "limit": 50, "sort": "desc", "include_content": "false"}
+        if until is not None:
+            params["end"] = _rfc(until)
         for batch in _chunks(list(symbols), 50):
-            for page in self._paged(f"{DATA_URL}/v1beta1/news", {
-                "symbols": ",".join(batch), "start": _rfc(since), "limit": 50, "sort": "desc",
-                "include_content": "false"}, "news", max_pages=10):
+            for page in self._paged(f"{DATA_URL}/v1beta1/news", dict(params, symbols=",".join(batch)),
+                                    "news", max_pages=10):
                 for n in page:
                     nid = str(n["id"])
                     items[nid] = NewsItem(
