@@ -71,6 +71,25 @@ def _backtest(args) -> int:
     return 0
 
 
+def _research(args) -> int:
+    from pathlib import Path
+
+    from . import research
+    from .history import HistoryCache
+    from .providers.alpaca import AlpacaProvider
+
+    cfg = load_config()
+    cache = HistoryCache(args.cache, None if args.cache_only else AlpacaProvider())
+    summary = research.run(cache, cfg, dt.date.fromisoformat(args.start), dt.date.fromisoformat(args.end))
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "research.json").write_text(json.dumps(summary, indent=2, default=str))
+    report = research.report_markdown(summary)
+    (out / "report.md").write_text(report)
+    print(report)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="apex_stocks")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -85,6 +104,13 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--out", default="backtest-results")
     b.add_argument("--cache-only", action="store_true", help="use cached data only; make no API calls")
     b.set_defaults(fn=_backtest)
+    r = sub.add_parser("research", help="test alternative signal ideas on cached daily bars")
+    r.add_argument("--start", required=True)
+    r.add_argument("--end", required=True)
+    r.add_argument("--cache", default=".cache/backtest")
+    r.add_argument("--out", default="backtest-results")
+    r.add_argument("--cache-only", action="store_true")
+    r.set_defaults(fn=_research)
     args = ap.parse_args(argv)
     return args.fn(args)
 

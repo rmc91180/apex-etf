@@ -38,8 +38,9 @@ jobs:
           ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
         run: |
           START="${{ github.event.inputs.start }}"; END="${{ github.event.inputs.end }}"
-          if [ -f backtest-range.txt ] && [ -z "$START" ]; then read START END < backtest-range.txt; fi
-          python -m apex_stocks.cli backtest --start "${START:-2025-04-01}" --end "${END:-2026-09-30}" --out backtest-results
+          MODE=backtest
+          if [ -f backtest-range.txt ] && [ -z "$START" ]; then read START END MODE < backtest-range.txt; fi
+          python -m apex_stocks.cli "${MODE:-backtest}" --start "${START:-2025-04-01}" --end "${END:-2026-09-30}" --out backtest-results
       - name: Publish report
         if: always()
         run: |
