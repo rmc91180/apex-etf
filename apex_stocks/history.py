@@ -169,6 +169,21 @@ class HistoryCache:
                 out.append(NewsItem(**d))
         return out
 
+    def news_archive(self, month: dt.date, symbols: Sequence[str]) -> list[dict]:
+        """All news for ``symbols`` published in the calendar month of ``month``, cached per month."""
+        path = self.root / "news_archive" / f"{month:%Y-%m}.json.gz"
+        cached = _read(path) if path.exists() else {"symbols": [], "items": []}
+        missing = sorted(set(symbols) - set(cached["symbols"]))
+        if missing:
+            start = dt.datetime(month.year, month.month, 1, tzinfo=dt.timezone.utc)
+            end = dt.datetime(month.year + (month.month == 12), month.month % 12 + 1, 1, tzinfo=dt.timezone.utc)
+            new = self._need_source("news archive").news_raw(missing, start, end)
+            have = {i["id"] for i in cached["items"]}
+            cached["items"] += [i for i in new if i["id"] not in have]
+            cached["symbols"] = sorted(set(cached["symbols"]) | set(missing))
+            _write(path, cached)
+        return cached["items"]
+
     def intraday(self, sym: str, start: dt.datetime, end: dt.datetime) -> list[dict]:
         path = self.root / "intraday" / f"{sym}_{start:%Y%m%d%H%M}_{end:%Y%m%d%H%M}.json.gz"
         if path.exists():

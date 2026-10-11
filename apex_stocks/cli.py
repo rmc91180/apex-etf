@@ -80,7 +80,8 @@ def _research(args) -> int:
 
     cfg = load_config()
     cache = HistoryCache(args.cache, None if args.cache_only else AlpacaProvider())
-    summary = research.run(cache, cfg, dt.date.fromisoformat(args.start), dt.date.fromisoformat(args.end))
+    summary = research.run(cache, cfg, dt.date.fromisoformat(args.start), dt.date.fromisoformat(args.end),
+                           with_news=args.news)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "research.json").write_text(json.dumps(summary, indent=2, default=str))
@@ -110,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--cache", default=".cache/backtest")
     r.add_argument("--out", default="backtest-results")
     r.add_argument("--cache-only", action="store_true")
+    r.add_argument("--news", action="store_true", help="also test news catalysts (downloads a news archive)")
     r.set_defaults(fn=_research)
     args = ap.parse_args(argv)
     return args.fn(args)

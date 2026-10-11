@@ -242,6 +242,19 @@ class AlpacaProvider:
             bars.extend(_bar(b) for b in page.get(symbol, []))
         return bars
 
+    def news_raw(self, symbols: Sequence[str], start: dt.datetime, end: dt.datetime) -> list[dict]:
+        """Every news item for these symbols in [start, end), compact, for building a backtest archive."""
+        items: dict[str, dict] = {}
+        params = {"start": _rfc(start), "end": _rfc(end), "limit": 50, "sort": "asc", "include_content": "false"}
+        for batch in _chunks(list(symbols), 100):
+            for page in self._paged(f"{DATA_URL}/v1beta1/news", dict(params, symbols=",".join(batch)),
+                                    "news", max_pages=100_000):
+                for n in page:
+                    items[str(n["id"])] = {"id": f"alpaca-{n['id']}", "t": n["created_at"],
+                                           "s": list(n.get("symbols") or ()), "h": n.get("headline", ""),
+                                           "m": (n.get("summary") or "")[:400], "src": n.get("source") or ""}
+        return sorted(items.values(), key=lambda x: x["t"])
+
     def get_news(self, symbols: Sequence[str], since: dt.datetime, until: dt.datetime | None = None) -> list[NewsItem]:
         items: dict[str, NewsItem] = {}
         params = {"start": _rfc(since), "limit": 50, "sort": "desc", "include_content": "false"}

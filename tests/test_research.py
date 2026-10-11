@@ -163,3 +163,30 @@ def test_evaluate_and_report_render():
     s = research.evaluate(cands, days, research.spy_regime(t), research.baseline(t, CFG, days, ["DROP"]))
     md = research.report_markdown(s)
     assert "Verdict" in md and "reversal" in md
+
+
+def test_catalyst_candidates_use_only_news_before_the_scan():
+    rows = flat(80) + [(10.0, 10.1, 9.9, 10.0, 2_000_000), (11.0, 11.8, 10.9, 11.5, 6_000_000)] + [(11.5, 11.7, 11.3, 11.6, 2e6)] * 4
+    t = table({"NEWS": rows})
+    d = dt.date.fromordinal(int(t.data["NEWS"]["d"][81]))
+    days = research.sessions(CAL, CFG, d, d)
+    scan = dt.datetime.combine(d, CFG.scan_time, research.ET)
+
+    def item(when, headline):
+        return {"id": headline, "t": when.astimezone(dt.timezone.utc).isoformat(), "s": ["NEWS"], "h": headline, "m": ""}
+
+    def news(month, syms):
+        assert syms == ["NEWS"]
+        return [item(scan - dt.timedelta(hours=2), "NEWS receives FDA approval for lead drug"),
+                item(scan + dt.timedelta(hours=1), "NEWS announces public offering")]   # after the scan: ignored
+
+    cands = research.catalyst_candidates(t, CFG, days, ["NEWS"], news, progress=lambda *_: None)
+    assert len(cands) == 1 and cands[0].strategy == "catalyst" and cands[0].strength == 100
+    assert cands[0].gross["open|0"] == pytest.approx(t.on("NEWS", days[0][2])["c"] / 11.0 - 1)
+    if CAL.session(d + dt.timedelta(days=1)):
+        assert cands[0].gross["day>open"] == pytest.approx(11.5 / 11.5 - 1)
+
+
+def test_catalyst_configs_use_their_own_plans():
+    ks = [k for k in research.all_configs() if k.strategy == "catalyst"]
+    assert {k.plan for k in ks} == {"open|0", "open|2.5", "day>open", "day>close"}
