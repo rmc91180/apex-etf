@@ -39,7 +39,12 @@ STRATEGIES = {
     "reversal": {"label": "Sharp one-day drop (rebound)", "thresholds": (6, 10, 15)},
     # Breakout: closed at a 20-day high, near the top of its range, on heavy volume.
     "breakout": {"label": "20-day breakout on volume", "thresholds": (1.5, 2.0, 3.0)},
+    # Bullish news before the open (same keyword classifier and 20h window as the live engine).
+    # Strength is the catalyst score x 100. Only tested when a news archive is loaded.
+    "catalyst": {"label": "Bullish news catalyst", "thresholds": (40, 60, 75),
+                 "plans": ("open|0", "open|2.5", "day>open", "day>close")},
 }
+PRICE_STRATEGIES = ("pullback", "reversal", "breakout")
 STOPS = (0.0, 1.5, 2.5)              # stop distance in ATRs below entry; 0 = no stop, time exit only
 # How the trade is held. "open" plans buy the morning open and sell at the planned exit, with a stop
 # in ATRs (0 = none). The two overnight plans buy the signal day's close and sell the next session's
@@ -47,7 +52,8 @@ STOPS = (0.0, 1.5, 2.5)              # stop distance in ATRs below entry; 0 = no
 PLANS = tuple(f"open|{st:g}" for st in STOPS) + ("close>open", "close>close")
 PLAN_LABELS = {"open|0": "buy open, no stop", "open|1.5": "buy open, 1.5 ATR stop",
                "open|2.5": "buy open, 2.5 ATR stop", "close>open": "buy close, sell next open",
-               "close>close": "buy close, sell next close"}
+               "close>close": "buy close, sell next close",
+               "day>open": "buy news-day close, sell next open", "day>close": "buy news-day close, sell next close"}
 MARKET_FILTERS = ("any", "spy_up")   # spy_up: only trade when SPY closed above its 50-day average
 MIN_TRAIN_TRADES = 10
 SKIPPED_SPLIT = [0]   # eligible stock-days dropped for a possible split during the hold
@@ -231,7 +237,7 @@ def candidates(daily: DailyTable, cfg: Config, days: Sequence[tuple[dt.date, dt.
             overnight_ok = (day - dt.date.fromordinal(p_ord)).days <= 2
             if not open_ok and not overnight_ok:
                 continue
-            for strat in STRATEGIES:
+            for strat in PRICE_STRATEGIES:
                 s = strength(strat, f, i)
                 if s is None or s < min(STRATEGIES[strat]["thresholds"]):
                     continue
@@ -280,7 +286,7 @@ def baseline(daily: DailyTable, cfg: Config, days, symbols=None) -> dict[str, li
 
 def all_configs() -> list[ConfigKey]:
     return [ConfigKey(s, t, pl, m) for s, spec in STRATEGIES.items() for t in spec["thresholds"]
-            for pl in PLANS for m in MARKET_FILTERS]
+            for pl in spec.get("plans", PLANS) for m in MARKET_FILTERS]
 
 
 def picks(cands: Sequence[Candidate], key: ConfigKey, regime: dict[int, bool],
@@ -370,7 +376,8 @@ def sessions(cal: MarketCalendar, cfg: Config, start: dt.date, end: dt.date) -> 
 def evaluate(cands: list[Candidate], days, regime: dict[int, bool], base: dict[str, list[float]]) -> dict:
     prev_session = {d: p for d, p, _ in days}
     months = sorted({_month(d) for d, _, _ in days})
-    configs = all_configs()
+    present = {c.strategy for c in cands}
+    configs = [k for k in all_configs() if k.strategy in present]
     by_config = {k: picks(cands, k, regime, prev_session) for k in configs}
     slip = DEFAULT_SLIPPAGE
 
@@ -386,12 +393,12 @@ def evaluate(cands: list[Candidate], days, regime: dict[int, bool], base: dict[s
         table.append({"config": k.label(), "key": k.__dict__, **m})
 
     per_strategy = {s: walk_forward(by_config, months, [k for k in configs if k.strategy == s])
-                    for s in STRATEGIES}
+                    for s in STRATEGIES if s in present}
     combined = walk_forward(by_config, months, configs)
     by_timing = {
         "Morning alert (buy the open)": walk_forward(by_config, months, [k for k in configs if k.plan.startswith("open")]),
         "Afternoon alert (buy the close, hold overnight)":
-            walk_forward(by_config, months, [k for k in configs if k.plan.startswith("close")]),
+            walk_forward(by_config, months, [k for k in configs if not k.plan.startswith("open")]),
     }
     return {
         "period": f"{days[0][0]}..{days[-1][0]}" if days else None,
@@ -406,8 +413,88 @@ def evaluate(cands: list[Candidate], days, regime: dict[int, bool], base: dict[s
     }
 
 
+def _eligible_by_month(daily: DailyTable, cfg: Config, syms, days) -> dict[tuple[int, int], set[str]]:
+    out: dict[tuple[int, int], set[str]] = {}
+    prev = sorted({p for _, p, _ in days})
+    for sym in syms:
+        a = daily.data[sym]
+        adv = _rolling_mean(a["c"] * a["v"], 20)
+        pos = {int(x): i for i, x in enumerate(a["d"])}
+        for p in prev:
+            i = pos.get(p.toordinal())
+            if i is not None and cfg.MIN_STOCK_PRICE <= a["c"][i] <= cfg.MAX_STOCK_PRICE \
+                    and adv[i] >= cfg.MIN_AVG_DOLLAR_VOLUME:
+                out.setdefault(_month(p), set()).add(sym)
+    return out
+
+
+def catalyst_candidates(daily: DailyTable, cfg: Config, days, syms, news_for_month: Callable,
+                        progress: Callable[[str], None] = print) -> list[Candidate]:
+    """Bullish-news candidates, scored exactly as the live engine scores catalysts."""
+    from .catalysts import assess
+    from .models import NewsItem
+
+    by_month = _eligible_by_month(daily, cfg, syms, days)
+    news: dict[str, list[NewsItem]] = {}
+    for (y, m), month_syms in sorted(by_month.items()):
+        items = news_for_month(dt.date(y, m, 1), sorted(month_syms))
+        for it in items:
+            n = NewsItem(id=it["id"], symbols=tuple(it["s"]), headline=it["h"], source=it.get("src", ""), url="",
+                         published_at=dt.datetime.fromisoformat(it["t"].replace("Z", "+00:00")), summary=it["m"])
+            for s in n.symbols:
+                news.setdefault(s, []).append(n)
+        progress(f"  news {y}-{m:02d}: {len(items)} items for {len(month_syms)} symbols")
+    for v in news.values():
+        v.sort(key=lambda n: n.published_at)
+    times = {s: [n.published_at for n in v] for s, v in news.items()}
+
+    import bisect
+    out: list[Candidate] = []
+    for sym in syms:
+        if sym not in news:
+            continue
+        a = daily.data[sym]
+        f = features(a, cfg.SPLIT_SUSPECT_RATIO)
+        pos = {int(x): i for i, x in enumerate(a["d"])}
+        for day, prev, exit_day in days:
+            i, j, k = pos.get(prev.toordinal()), pos.get(day.toordinal()), pos.get(exit_day.toordinal())
+            if i is None or j is None or k is None or i < 60:
+                continue
+            c = a["c"][i]
+            if not (cfg.MIN_STOCK_PRICE <= c <= cfg.MAX_STOCK_PRICE):
+                continue
+            if f["adv_dollar"][i] < cfg.MIN_AVG_DOLLAR_VOLUME or f["adv_shares"][i] < cfg.MIN_AVG_SHARE_VOLUME:
+                continue
+            if f["split_recent"][i] or math.isnan(f["atr_pct"][i]) or a["o"][j] <= 0:
+                continue
+            now = dt.datetime.combine(day, cfg.scan_time, ET)
+            lo = bisect.bisect_left(times[sym], now - dt.timedelta(hours=cfg.NEWS_LOOKBACK_HOURS))
+            hi = bisect.bisect_right(times[sym], now)
+            if lo >= hi:
+                continue
+            ca = assess(news[sym][lo:hi], now)
+            if ca.score * 100 < min(STRATEGIES["catalyst"]["thresholds"]):
+                continue
+            gross: dict[str, float | None] = {}
+            why: dict[str, str] = {}
+            hold_ok = f["jump"][j + 1:k + 1].max() < cfg.SPLIT_SUSPECT_RATIO if k > j else True
+            for st, key in ((0.0, "open|0"), (2.5, "open|2.5")):
+                if hold_ok:
+                    gross[key], why[key] = simulate_daily(a, j, k, f["atr_pct"][i], st)
+                else:
+                    gross[key] = None
+            nxt = j + 1
+            ok = (nxt < len(a["d"]) and a["d"][nxt] - a["d"][j] <= 2 and f["jump"][nxt] < cfg.SPLIT_SUSPECT_RATIO)
+            gross["day>open"] = a["o"][nxt] / a["c"][j] - 1 if ok else None
+            gross["day>close"] = a["c"][nxt] / a["c"][j] - 1 if ok else None
+            why["day>open"] = why["day>close"] = "time"
+            out.append(Candidate(day, "catalyst", sym, round(ca.score * 100, 2), gross, why))
+    progress(f"{len(out)} catalyst candidates")
+    return out
+
+
 def run(cache: HistoryCache, cfg: Config, start: dt.date, end: dt.date,
-        progress: Callable[[str], None] = print) -> dict:
+        progress: Callable[[str], None] = print, with_news: bool = False) -> dict:
     cal = MarketCalendar()
     universe = cache.universe()
     elig = eligible_symbols(universe, cfg)
@@ -418,6 +505,8 @@ def run(cache: HistoryCache, cfg: Config, start: dt.date, end: dt.date,
     progress(f"daily bars for {len(syms)} eligible symbols")
     days = sessions(cal, cfg, start, end)
     cands = candidates(daily, cfg, days, syms, progress)
+    if with_news:
+        cands += catalyst_candidates(daily, cfg, days, syms, cache.news_archive, progress)
     progress(f"{len(cands)} candidates; computing baseline")
     return evaluate(cands, days, spy_regime(daily), baseline(daily, cfg, days, syms))
 
