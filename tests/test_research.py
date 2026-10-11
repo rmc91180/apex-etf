@@ -68,15 +68,45 @@ def test_reversal_candidate_uses_only_prior_close_and_buys_next_open():
     assert len(rev) == 1 and rev[0].strength == pytest.approx(12.0)
     exit_day = days[0][2]
     exit_close = t.on("DROP", exit_day)["c"]
-    assert rev[0].gross[0.0] == pytest.approx(exit_close / 8.8 - 1)
+    assert rev[0].gross["open|0"] == pytest.approx(exit_close / 8.8 - 1)
+    # Overnight plans buy the 8.8 drop-day close and sell the trade day's open or close.
+    if (trade_day - days[0][1]).days <= 2:
+        assert rev[0].gross["close>open"] == pytest.approx(0.0)
+        assert rev[0].gross["close>close"] == pytest.approx(9.5 / 8.8 - 1)
 
 
-def test_chase_rule_skips_gap_up_open():
+def test_chase_rule_skips_gap_up_open_for_morning_plans_only():
     rows = drop_then_bounce()
     rows[81] = (9.2, 9.6, 9.1, 9.5, 3_000_000)   # opens 4.5% above the 8.8 close
     t = table({"DROP": rows})
     d = dt.date.fromordinal(int(t.data["DROP"]["d"][81]))
-    assert research.candidates(t, CFG, research.sessions(CAL, CFG, d, d), ["DROP"], progress=lambda *_: None) == []
+    days = research.sessions(CAL, CFG, d, d)
+    cands = research.candidates(t, CFG, days, ["DROP"], progress=lambda *_: None)
+    if (d - days[0][1]).days <= 2:
+        assert cands and all(c.gross["open|0"] is None and c.gross["close>open"] is not None for c in cands)
+    else:
+        assert cands == []
+
+
+def test_overnight_plans_skip_entries_more_than_48h_before_the_next_session():
+    fri, mon = dt.date(2026, 3, 6), dt.date(2026, 3, 9)
+    rows = flat(80)
+    rows.append((10.0, 10.0, 8.7, 8.8, 4_000_000))
+    rows.append((8.8, 9.6, 8.7, 9.5, 3_000_000))
+    rows += [(9.5, 9.7, 9.4, 9.6, 2_000_000)] * 3
+    # start so the drop lands on Friday 2026-03-06
+    start = fri
+    n = 80
+    while n:
+        start -= dt.timedelta(days=1)
+        if CAL.session(start):
+            n -= 1
+    t = table({"DROP": rows}, start=start)
+    assert dt.date.fromordinal(int(t.data["DROP"]["d"][80])) == fri
+    days = research.sessions(CAL, CFG, mon, mon)
+    cands = research.candidates(t, CFG, days, ["DROP"], progress=lambda *_: None)
+    rev = [c for c in cands if c.strategy == "reversal"]
+    assert rev and rev[0].gross["close>open"] is None and rev[0].gross["open|0"] is not None
 
 
 def test_illiquid_and_expensive_stocks_are_not_candidates():
@@ -89,25 +119,25 @@ def test_illiquid_and_expensive_stocks_are_not_candidates():
 
 
 def C(day, strat, sym, strength, ret):
-    return research.Candidate(day, strat, sym, strength, {s: ret for s in research.STOPS})
+    return research.Candidate(day, strat, sym, strength, {p: ret for p in research.PLANS})
 
 
 def test_picks_take_strongest_and_respect_threshold_and_market_filter():
     d1, d2 = dt.date(2026, 3, 2), dt.date(2026, 3, 3)
     prev = {d1: dt.date(2026, 2, 27), d2: d1}
     cands = [C(d1, "reversal", "A", 7, 0.01), C(d1, "reversal", "B", 12, -0.02), C(d2, "reversal", "C", 8, 0.03)]
-    k = research.ConfigKey("reversal", 6, 0.0, "any")
+    k = research.ConfigKey("reversal", 6, "open|0", "any")
     assert [c.symbol for c in research.picks(cands, k, {}, prev)] == ["B", "C"]
-    k10 = research.ConfigKey("reversal", 10, 0.0, "any")
+    k10 = research.ConfigKey("reversal", 10, "open|0", "any")
     assert [c.symbol for c in research.picks(cands, k10, {}, prev)] == ["B"]
-    up = research.ConfigKey("reversal", 6, 0.0, "spy_up")
+    up = research.ConfigKey("reversal", 6, "open|0", "spy_up")
     regime = {dt.date(2026, 2, 27).toordinal(): False, d1.toordinal(): True}
     assert [c.symbol for c in research.picks(cands, up, regime, prev)] == ["C"]
 
 
 def test_walk_forward_is_out_of_sample_and_can_choose_no_trading():
-    good = research.ConfigKey("reversal", 6, 0.0, "any")
-    bad = research.ConfigKey("breakout", 1.5, 0.0, "any")
+    good = research.ConfigKey("reversal", 6, "open|0", "any")
+    bad = research.ConfigKey("breakout", 1.5, "open|0", "any")
     days = []
     d = dt.date(2025, 1, 2)
     while d < dt.date(2025, 11, 1):

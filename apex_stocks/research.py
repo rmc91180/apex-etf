@@ -41,6 +41,13 @@ STRATEGIES = {
     "breakout": {"label": "20-day breakout on volume", "thresholds": (1.5, 2.0, 3.0)},
 }
 STOPS = (0.0, 1.5, 2.5)              # stop distance in ATRs below entry; 0 = no stop, time exit only
+# How the trade is held. "open" plans buy the morning open and sell at the planned exit, with a stop
+# in ATRs (0 = none). The two overnight plans buy the signal day's close and sell the next session's
+# open or close; they need an afternoon alert instead of a morning one, and skip Fridays (48h cap).
+PLANS = tuple(f"open|{st:g}" for st in STOPS) + ("close>open", "close>close")
+PLAN_LABELS = {"open|0": "buy open, no stop", "open|1.5": "buy open, 1.5 ATR stop",
+               "open|2.5": "buy open, 2.5 ATR stop", "close>open": "buy close, sell next open",
+               "close>close": "buy close, sell next close"}
 MARKET_FILTERS = ("any", "spy_up")   # spy_up: only trade when SPY closed above its 50-day average
 MIN_TRAIN_TRADES = 10
 SKIPPED_SPLIT = [0]   # eligible stock-days dropped for a possible split during the hold
@@ -52,21 +59,20 @@ class Candidate:
     strategy: str
     symbol: str
     strength: float
-    gross: dict[float, float]        # stop (ATRs) -> gross return
-    exit_reason: dict[float, str] = field(default_factory=dict)
+    gross: dict[str, float | None]   # plan -> gross return (None: not tradable under that plan)
+    exit_reason: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class ConfigKey:
     strategy: str
     threshold: float
-    stop: float
+    plan: str
     market: str
 
     def label(self) -> str:
-        stop = "no stop" if not self.stop else f"{self.stop:g} ATR stop"
         mkt = "" if self.market == "any" else ", SPY uptrend only"
-        return f"{self.strategy} ≥{self.threshold:g}, {stop}{mkt}"
+        return f"{self.strategy} ≥{self.threshold:g}, {PLAN_LABELS[self.plan]}{mkt}"
 
 
 def net(gross: float, slip: float) -> float:
@@ -215,28 +221,40 @@ def candidates(daily: DailyTable, cfg: Config, days: Sequence[tuple[dt.date, dt.
                 continue
             # A split inside the holding period would fake the return. This also drops genuine
             # moves of 80%+ in a day or two, so the count is reported to keep the bias visible.
-            if f["jump"][j:k + 1].max() >= cfg.SPLIT_SUSPECT_RATIO:
+            if f["jump"][j] >= cfg.SPLIT_SUSPECT_RATIO or a["o"][j] <= 0:
                 skipped_split[0] += 1
                 continue
-            # Don't chase: skip when it opens too far above the prior close (same rule as live).
-            if a["o"][j] > c * (1 + cfg.MAX_CHASE_PERCENT / 100) or a["o"][j] <= 0:
+            # Morning plans: don't chase a stock that opens too far above the prior close (as live).
+            open_ok = (f["jump"][j:k + 1].max() < cfg.SPLIT_SUSPECT_RATIO
+                       and a["o"][j] <= c * (1 + cfg.MAX_CHASE_PERCENT / 100))
+            # Overnight plans: the exit must come within 48 hours, so no Friday or pre-holiday entries.
+            overnight_ok = (day - dt.date.fromordinal(p_ord)).days <= 2
+            if not open_ok and not overnight_ok:
                 continue
             for strat in STRATEGIES:
                 s = strength(strat, f, i)
                 if s is None or s < min(STRATEGIES[strat]["thresholds"]):
                     continue
-                gross, why = {}, {}
+                gross: dict[str, float | None] = {}
+                why: dict[str, str] = {}
                 for st in STOPS:
-                    gross[st], why[st] = simulate_daily(a, j, k, f["atr_pct"][i], st)
+                    key = f"open|{st:g}"
+                    if open_ok:
+                        gross[key], why[key] = simulate_daily(a, j, k, f["atr_pct"][i], st)
+                    else:
+                        gross[key] = None
+                gross["close>open"] = a["o"][j] / c - 1 if overnight_ok else None
+                gross["close>close"] = a["c"][j] / c - 1 if overnight_ok else None
+                why["close>open"] = why["close>close"] = "time"
                 out.append(Candidate(day, strat, sym, round(float(s), 4), gross, why))
         if n % 500 == 0:
             progress(f"  scanned {n}/{len(syms)} symbols, {len(out)} candidates so far")
     return out
 
 
-def baseline(daily: DailyTable, cfg: Config, days, symbols=None) -> list[float]:
-    """Every eligible stock, every day, open-to-exit with no stop: the drift to beat."""
-    out = []
+def baseline(daily: DailyTable, cfg: Config, days, symbols=None) -> dict[str, list[float]]:
+    """Every eligible stock, every day, no stop: the drift each plan has to beat."""
+    out: dict[str, list[float]] = {"open|0": [], "close>open": [], "close>close": []}
     syms = list(symbols) if symbols is not None else [s for s in daily.symbols() if s != "SPY"]
     for sym in syms:
         a = daily.data[sym]
@@ -251,15 +269,18 @@ def baseline(daily: DailyTable, cfg: Config, days, symbols=None) -> list[float]:
             if cfg.MIN_STOCK_PRICE <= a["c"][i] <= cfg.MAX_STOCK_PRICE and adv[i] >= cfg.MIN_AVG_DOLLAR_VOLUME:
                 r = a["c"][k] / a["o"][j] - 1
                 if abs(r) < 0.8:   # a split, not a trade
-                    out.append(r)
+                    out["open|0"].append(r)
+                if (d - p).days <= 2 and abs(a["c"][j] / a["c"][i] - 1) < 0.8:
+                    out["close>open"].append(a["o"][j] / a["c"][i] - 1)
+                    out["close>close"].append(a["c"][j] / a["c"][i] - 1)
     return out
 
 
 # ── selection and evaluation ───────────────────────────────────
 
 def all_configs() -> list[ConfigKey]:
-    return [ConfigKey(s, t, st, m) for s, spec in STRATEGIES.items() for t in spec["thresholds"]
-            for st in STOPS for m in MARKET_FILTERS]
+    return [ConfigKey(s, t, pl, m) for s, spec in STRATEGIES.items() for t in spec["thresholds"]
+            for pl in PLANS for m in MARKET_FILTERS]
 
 
 def picks(cands: Sequence[Candidate], key: ConfigKey, regime: dict[int, bool],
@@ -267,7 +288,7 @@ def picks(cands: Sequence[Candidate], key: ConfigKey, regime: dict[int, bool],
     """The single strongest qualifying candidate per day under a config."""
     best: dict[dt.date, Candidate] = {}
     for c in cands:
-        if c.strategy != key.strategy or c.strength < key.threshold:
+        if c.strategy != key.strategy or c.strength < key.threshold or c.gross[key.plan] is None:
             continue
         if key.market == "spy_up" and not regime.get(prev_session[c.day].toordinal(), False):
             continue
@@ -278,18 +299,18 @@ def picks(cands: Sequence[Candidate], key: ConfigKey, regime: dict[int, bool],
 
 
 def returns(ps: Sequence[Candidate], key: ConfigKey, slip: float) -> list[float]:
-    return [net(c.gross[key.stop], slip) for c in ps]
+    return [net(c.gross[key.plan], slip) for c in ps]
 
 
 def basket(cands: Sequence[Candidate], key: ConfigKey, regime, prev_session, slip: float) -> list[float]:
     """Average of all qualifying candidates per day: is there signal at all, with less noise?"""
     days: dict[dt.date, list[float]] = {}
     for c in cands:
-        if c.strategy != key.strategy or c.strength < key.threshold:
+        if c.strategy != key.strategy or c.strength < key.threshold or c.gross[key.plan] is None:
             continue
         if key.market == "spy_up" and not regime.get(prev_session[c.day].toordinal(), False):
             continue
-        days.setdefault(c.day, []).append(net(c.gross[key.stop], slip))
+        days.setdefault(c.day, []).append(net(c.gross[key.plan], slip))
     return [sum(v) / len(v) for _, v in sorted(days.items())]
 
 
@@ -329,7 +350,7 @@ def walk_forward(by_config: dict[ConfigKey, list[Candidate]], months: list[tuple
         })
         i += test_months
     return {"folds": folds,
-            "out_of_sample": {f"{s * 100:g}%": metrics([net(c.gross[k.stop], s) for k, c in oos]) for s in SLIPPAGES}}
+            "out_of_sample": {f"{s * 100:g}%": metrics([net(c.gross[k.plan], s) for k, c in oos]) for s in SLIPPAGES}}
 
 
 def sessions(cal: MarketCalendar, cfg: Config, start: dt.date, end: dt.date) -> list[tuple[dt.date, dt.date, dt.date]]:
@@ -346,7 +367,7 @@ def sessions(cal: MarketCalendar, cfg: Config, start: dt.date, end: dt.date) -> 
     return out
 
 
-def evaluate(cands: list[Candidate], days, regime: dict[int, bool], base: list[float]) -> dict:
+def evaluate(cands: list[Candidate], days, regime: dict[int, bool], base: dict[str, list[float]]) -> dict:
     prev_session = {d: p for d, p, _ in days}
     months = sorted({_month(d) for d, _, _ in days})
     configs = all_configs()
@@ -360,22 +381,28 @@ def evaluate(cands: list[Candidate], days, regime: dict[int, bool], base: list[f
         m["basket_avg_pct"] = metrics(basket(cands, k, regime, prev_session, slip)).get("avg_return_pct")
         exits: dict[str, int] = {}
         for c in by_config[k]:
-            exits[c.exit_reason[k.stop]] = exits.get(c.exit_reason[k.stop], 0) + 1
+            exits[c.exit_reason[k.plan]] = exits.get(c.exit_reason[k.plan], 0) + 1
         m["exits"] = exits
         table.append({"config": k.label(), "key": k.__dict__, **m})
 
     per_strategy = {s: walk_forward(by_config, months, [k for k in configs if k.strategy == s])
                     for s in STRATEGIES}
     combined = walk_forward(by_config, months, configs)
+    by_timing = {
+        "Morning alert (buy the open)": walk_forward(by_config, months, [k for k in configs if k.plan.startswith("open")]),
+        "Afternoon alert (buy the close, hold overnight)":
+            walk_forward(by_config, months, [k for k in configs if k.plan.startswith("close")]),
+    }
     return {
         "period": f"{days[0][0]}..{days[-1][0]}" if days else None,
         "trading_days": len(days),
         "candidates": len(cands),
         "stock_days_skipped_for_possible_split": SKIPPED_SPLIT[0],
-        "baseline_every_eligible_stock_no_slippage": metrics(base),
+        "baseline_every_eligible_stock_no_slippage": {PLAN_LABELS[k]: metrics(v) for k, v in base.items()},
         "configs_full_period_in_sample": table,
         "walk_forward_per_idea": per_strategy,
         "walk_forward_choosing_among_all_ideas": combined,
+        "walk_forward_by_alert_timing": by_timing,
     }
 
 
@@ -423,7 +450,8 @@ def report_markdown(s: dict) -> str:
     out = [f"# APEX Stocks signal research {s['period']}", "",
            f"{s['trading_days']} trading days, {s['candidates']} qualifying candidates across all ideas "
            f"({s.get('stock_days_skipped_for_possible_split', 0)} stock-days skipped for a possible split). "
-           "Daily-bar simulation: buy the open, sell the exit-day close, stops checked on daily lows.", "",
+           "Daily-bar simulation: morning plans buy the open and sell the exit-day close with stops checked on "
+           "daily lows; overnight plans buy the signal day's close and sell the next open or close.", "",
            "## Verdict: choosing among all ideas, walk-forward, out-of-sample", "", "```",
            verdict(s["walk_forward_choosing_among_all_ideas"]), "```", "", "| Train | Test | Chosen | Test trades | Test avg | Test t |",
            "|---|---|---|---|---|---|"]
@@ -431,6 +459,9 @@ def report_markdown(s: dict) -> str:
         m = f["test"]
         out.append(f"| {f['train']} | {f['test_period']} | {f['chosen']} | {m.get('trades', 0)} | "
                    f"{m.get('avg_return_pct', '')} | {m.get('t_stat', '')} |")
+    out += ["", "## By alert timing, walk-forward, out-of-sample at 0.25% slippage", "", head]
+    for name, wf in s["walk_forward_by_alert_timing"].items():
+        out.append(_row(name, wf["out_of_sample"]["0.25%"]))
     out += ["", "## Each idea on its own, walk-forward, out-of-sample at 0.25% slippage", "", head]
     for strat, wf in s["walk_forward_per_idea"].items():
         out.append(_row(STRATEGIES[strat]["label"], wf["out_of_sample"]["0.25%"]))
@@ -443,9 +474,11 @@ def report_markdown(s: dict) -> str:
             "|---|---|---|---|---|---|---|---|---|"]
     for r in sorted(s["configs_full_period_in_sample"], key=lambda r: -(r.get("t_stat") or -99)):
         out.append(_row(r["config"], r, f" {r.get('basket_avg_pct', '')} | {r.get('exits', '')} |"))
-    out += ["", "## Baseline", "", head, _row("Every eligible stock, every day, no stop, no slippage",
-                                             s["baseline_every_eligible_stock_no_slippage"]), "",
-            "Notes: returns are per trade. The exit is the exit day's 4:00 PM close, a stand-in for the 3:30 PM "
+    out += ["", "## Baseline: every eligible stock, every day, no slippage", "", head]
+    out += [_row(k, v) for k, v in s["baseline_every_eligible_stock_no_slippage"].items()]
+    out += ["",
+            "Notes: returns are per trade. Overnight plans use the signal day's close as both the signal and the "
+            "entry, so live they need the scan near 3:45 PM and an entry at the close. The morning exit is the exit day's 4:00 PM close, a stand-in for the 3:30 PM "
             "exit. The max-chase rule uses the prior close as the reference. Stops are ATR-based and checked on "
             "daily lows; if a stop and a big gain happen the same day, the stop is assumed. Trades near a split "
             "are skipped. Delisted stocks are included where Alpaca still lists them."]
